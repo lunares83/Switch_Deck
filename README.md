@@ -65,3 +65,9 @@ Certifique-se de que o Switch e o PC estão na mesma rede Wi-Fi.
 Abra o app via Homebrew Menu.
 
 Se o fundo estiver verde, você está conectado! Se estiver vermelho, verifique o IP no config.json.
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+
+https://www.paypal.com/donate/?business=4R7CCXLYZDM4C&no_recurring=0&item_name=I+would+appreciate+it+if+you+could+buy+me+a+coffee.&currency_code=USD
+
+
