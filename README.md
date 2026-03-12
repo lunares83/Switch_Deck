@@ -33,6 +33,10 @@ Open the app via the Homebrew Menu.
 
 If the background is green, you are connected! If it's red, double-check the IP in config.json.
 
+I'll upload pictures and a video of it working soon.
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+
 Português
 💡 O Conceito
 
@@ -66,8 +70,4 @@ Abra o app via Homebrew Menu.
 
 Se o fundo estiver verde, você está conectado! Se estiver vermelho, verifique o IP no config.json.
 
--------------------------------------------------------------------------------------------------------------------------------------------------------
-
-https://www.paypal.com/donate/?business=4R7CCXLYZDM4C&no_recurring=0&item_name=I+would+appreciate+it+if+you+could+buy+me+a+coffee.&currency_code=USD
-
-
+Em breve subo imagens e video dele funcionando.
