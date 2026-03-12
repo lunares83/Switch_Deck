@@ -9,6 +9,9 @@ build/
 *.o
 *.d
 
+# --- Atalhos de Apps ---
+*.ink
+
 # --- Python ---
 # Ignora arquivos temporários e ambientes virtuais
 __pycache__/
