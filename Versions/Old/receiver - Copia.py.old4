@@ -1,0 +1,110 @@
+import json
+import os
+import socket
+import subprocess
+from typing import Any, Dict, Optional
+
+HOST = "0.0.0.0"
+PORT = 5555
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+
+STATE: Dict[str, Any] = {"current_page": 1, "pages": {}}
+
+def load_config() -> None:
+    global STATE
+    if not os.path.exists(CONFIG_PATH):
+        print(f"[receiver] config.json não encontrado: {CONFIG_PATH}")
+        STATE = {"current_page": 1, "pages": {}}
+        return
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        STATE = json.load(f)
+    STATE["current_page"] = int(STATE.get("current_page", 1))
+    STATE["pages"] = STATE.get("pages", {})
+    print(f"[receiver] Config carregado. Página atual={STATE['current_page']}")
+
+def get_action(page: int, button_id: int) -> Optional[Dict[str, Any]]:
+    pages = STATE.get("pages", {})
+    page_obj = pages.get(str(page), {})
+    return page_obj.get(str(button_id))
+
+def act_open_app(path: str) -> None:
+    print(f"[receiver] open_app: {path}")
+    subprocess.Popen(["cmd", "/c", "start", "", path])
+
+def act_open_url(url: str) -> None:
+    print(f"[receiver] open_url: {url}")
+    subprocess.Popen(["cmd", "/c", "start", "", url])  # "" evita parsing errado [web:440]
+
+def act_hotkey(keys) -> None:
+    print(f"[receiver] hotkey (stub): {keys}")
+
+def act_goto_page(page: int) -> None:
+    STATE["current_page"] = int(page)
+    print(f"[receiver] goto_page -> {STATE['current_page']}")
+
+def run_action(button_id: int) -> None:
+    page = int(STATE.get("current_page", 1))
+    action = get_action(page, button_id)
+    if not action:
+        print(f"[receiver] Sem ação: page={page} id={button_id}")
+        return
+
+    t = action.get("type")
+    if t == "open_app":
+        act_open_app(action["path"])
+    elif t == "open_url":
+        act_open_url(action["url"])
+    elif t == "hotkey":
+        act_hotkey(action.get("keys", []))
+    elif t == "goto_page":
+        act_goto_page(action["page"])
+    else:
+        print(f"[receiver] Tipo desconhecido: {t}")
+
+def handle_line(line: str) -> None:
+    line = line.strip()
+    if not line:
+        return
+
+    if line.startswith("HELLO"):
+        print("[receiver] HELLO ok")
+        return
+
+    parts = line.split()
+    if len(parts) == 2 and parts[0] == "BTN_PRESS":
+        try:
+            button_id = int(parts[1])
+        except ValueError:
+            print("[receiver] BTN_PRESS inválido:", line)
+            return
+        run_action(button_id)
+        return
+
+    print("[receiver] Mensagem desconhecida:", line)
+
+def serve_forever() -> None:
+    load_config()
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((HOST, PORT))
+        s.listen(1)
+        print(f"[receiver] ouvindo em {HOST}:{PORT}")
+
+        while True:
+            conn, addr = s.accept()
+            print("[receiver] conectado por", addr)
+
+            try:
+                with conn:
+                    f = conn.makefile("r", encoding="utf-8", errors="replace")
+                    for line in f:
+                        print("[receiver] RX:", line.strip())
+                        handle_line(line)
+            except Exception as e:
+                print("[receiver] erro:", repr(e))
+
+            print("[receiver] desconectou (voltando a ouvir)")
+
+if __name__ == "__main__":
+    serve_forever()

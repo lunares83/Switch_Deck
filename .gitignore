@@ -1,0 +1,45 @@
+# --- Binários e Compilação do Switch (devkitPro) ---
+# Ignora os arquivos pesados que o 'make' gera
+build/
+*.elf
+*.nacp
+*.nro
+*.map
+*.lst
+*.o
+*.d
+
+# --- Python ---
+# Ignora arquivos temporários e ambientes virtuais
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+build/
+dist/
+*.spec
+
+# --- Sistema Operacional ---
+# Windows
+Thumbs.db
+desktop.ini
+
+# macOS (Como você usa Mac, isso é essencial)
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# --- Editores de Código ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Específicos do Projeto ---
+# Ignora a pasta temporária de ícones gerada pelo configurador
+/icons/
+# Mas NÃO ignora a pasta original de assets
+!/assets_icons/

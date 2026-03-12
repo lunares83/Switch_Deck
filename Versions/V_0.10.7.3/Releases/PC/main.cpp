@@ -1,0 +1,333 @@
+#include <switch.h>
+#include <switch/runtime/devices/fs_dev.h>
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <unistd.h>
+
+static int connect_to_pc(const char* ip, int port) {
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) return -1;
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    addr.sin_addr.s_addr = inet_addr(ip);
+    if (connect(sockfd, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sockfd);
+        return -2;
+    }
+    return sockfd;
+}
+
+static void send_btn(int sockfd, int page, int id) {
+    if (sockfd < 0) return;
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "BTN_PRESS %d %d\n", page, id);
+    send(sockfd, buf, std::strlen(buf), 0);
+}
+
+static bool point_in_rect(int x, int y, const SDL_Rect& r) {
+    return x >= r.x && x < (r.x + r.w) && y >= r.y && y < (r.y + r.h);
+}
+
+static std::string read_file_all(const char* path) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return {};
+    std::fseek(f, 0, SEEK_END);
+    long sz = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { std::fclose(f); return {}; }
+    std::string out;
+    out.resize((size_t)sz);
+    std::fread(out.data(), 1, (size_t)sz, f);
+    std::fclose(f);
+    return out;
+}
+
+static bool json_find_int_top(const std::string& s, const char* key, int& out) {
+    std::string k = std::string("\"") + key + "\"";
+    size_t p = s.find(k);
+    if (p == std::string::npos) return false;
+    p = s.find(':', p);
+    if (p == std::string::npos) return false;
+    p++;
+    while (p < s.size() && strchr(" \n\r\t", s[p])) p++;
+    int val = 0; bool any = false;
+    while (p < s.size() && s[p] >= '0' && s[p] <= '9') {
+        any = true; val = val * 10 + (s[p] - '0'); p++;
+    }
+    if (!any) return false;
+    out = val;
+    return true;
+}
+
+static bool json_get_string_top(const std::string& s, const char* key, std::string& out) {
+    std::string k = std::string("\"") + key + "\"";
+    size_t p = s.find(k);
+    if (p == std::string::npos) return false;
+    p = s.find(':', p);
+    if (p == std::string::npos) return false;
+    p++;
+    while (p < s.size() && strchr(" \n\r\t", s[p])) p++;
+    if (p >= s.size() || s[p] != '"') return false;
+    p++;
+    std::string v;
+    while (p < s.size() && s[p] != '"') {
+        if (s[p] == '\\') { p++; if (p < s.size()) v.push_back(s[p]); }
+        else v.push_back(s[p]);
+        p++;
+    }
+    out = v;
+    return true;
+}
+
+static size_t find_object_start_after_key(const std::string& s, size_t from, const std::string& keyQuoted) {
+    size_t p = s.find(keyQuoted, from);
+    if (p == std::string::npos) return std::string::npos;
+    p = s.find(':', p);
+    if (p == std::string::npos) return std::string::npos;
+    p++;
+    while (p < s.size() && strchr(" \n\r\t", s[p])) p++;
+    if (p < s.size() && s[p] == '{') return p;
+    return std::string::npos;
+}
+
+static size_t find_matching_brace(const std::string& s, size_t openPos) {
+    int depth = 0; bool inStr = false;
+    for (size_t i = openPos; i < s.size(); i++) {
+        char c = s[i];
+        if (inStr) {
+            if (c == '\\') { i++; continue; }
+            if (c == '"') inStr = false;
+            continue;
+        }
+        if (c == '"') { inStr = true; continue; }
+        if (c == '{') depth++;
+        if (c == '}') { depth--; if (depth == 0) return i; }
+    }
+    return std::string::npos;
+}
+
+static bool json_get_string_field_in_object(const std::string& obj, const char* field, std::string& out) {
+    std::string k = std::string("\"") + field + "\"";
+    size_t p = obj.find(k);
+    if (p == std::string::npos) return false;
+    p = obj.find(':', p);
+    if (p == std::string::npos) return false;
+    p++;
+    while (p < obj.size() && strchr(" \n\r\t", obj[p])) p++;
+    if (p >= obj.size() || obj[p] != '"') return false;
+    p++;
+    std::string v;
+    while (p < obj.size()) {
+        char c = obj[p++];
+        if (c == '\\') { if (p < obj.size()) v.push_back(obj[p++]); continue; }
+        if (c == '"') break;
+        v.push_back(c);
+    }
+    out = v;
+    return true;
+}
+
+static bool json_get_int_field_in_object(const std::string& obj, const char* field, int& out) {
+    std::string k = std::string("\"") + field + "\"";
+    size_t p = obj.find(k);
+    if (p == std::string::npos) return false;
+    p = obj.find(':', p);
+    if (p == std::string::npos) return false;
+    p++;
+    while (p < obj.size() && strchr(" \n\r\t", obj[p])) p++;
+    int val = 0; bool any = false;
+    while (p < obj.size() && obj[p] >= '0' && obj[p] <= '9') {
+        any = true; val = val * 10 + (obj[p] - '0'); p++;
+    }
+    if (!any) return false;
+    out = val;
+    return true;
+}
+
+static bool json_get_slot_object(int page, int key, const std::string& json, std::string& outObj) {
+    size_t pagesObjOpen = find_object_start_after_key(json, 0, "\"pages\"");
+    if (pagesObjOpen == std::string::npos) return false;
+    size_t pagesObjClose = find_matching_brace(json, pagesObjOpen);
+    if (pagesObjClose == std::string::npos) return false;
+    std::string pagesObj = json.substr(pagesObjOpen, pagesObjClose - pagesObjOpen + 1);
+
+    // USANDO OS NOVOS PREFIXOS 'p' e 'b'
+    std::string pageKey = std::string("\"p") + std::to_string(page) + "\"";
+    size_t pageObjOpen = find_object_start_after_key(pagesObj, 0, pageKey);
+    if (pageObjOpen == std::string::npos) return false;
+    size_t pageObjClose = find_matching_brace(pagesObj, pageObjOpen);
+    if (pageObjClose == std::string::npos) return false;
+    std::string pageObj = pagesObj.substr(pageObjOpen, pageObjClose - pageObjOpen + 1);
+
+    std::string keyKey = std::string("\"b") + std::to_string(key) + "\"";
+    size_t keyObjOpen = find_object_start_after_key(pageObj, 0, keyKey);
+    if (keyObjOpen == std::string::npos) return false;
+    size_t keyObjClose = find_matching_brace(pageObj, keyObjOpen);
+    if (keyObjClose == std::string::npos) return false;
+    outObj = pageObj.substr(keyObjOpen, keyObjClose - keyObjOpen + 1);
+    return true;
+}
+
+static bool json_get_icon_for(int page, int key, const std::string& json, std::string& iconOut) {
+    std::string obj;
+    if (!json_get_slot_object(page, key, json, obj)) return false;
+    return json_get_string_field_in_object(obj, "icon", iconOut);
+}
+
+static bool json_get_type_and_page_for(int page, int key, const std::string& json, std::string& typeOut, int& gotoPage) {
+    std::string obj;
+    if (!json_get_slot_object(page, key, json, obj)) return false;
+    bool okType = json_get_string_field_in_object(obj, "type", typeOut);
+    bool okPg   = json_get_int_field_in_object(obj, "page", gotoPage);
+    return okType || okPg;
+}
+
+struct TexEntry { std::string path; SDL_Texture* tex; };
+
+static SDL_Texture* texcache_get(SDL_Renderer* ren, std::vector<TexEntry>& cache, const std::string& path) {
+    for (auto& e : cache) if (e.path == path) return e.tex;
+    SDL_Texture* t = IMG_LoadTexture(ren, path.c_str());
+    cache.push_back({path, t});
+    return t;
+}
+
+static void texcache_free(std::vector<TexEntry>& cache) {
+    for (auto& e : cache) if (e.tex) SDL_DestroyTexture(e.tex);
+    cache.clear();
+}
+
+int main(int, char**) {
+    fsdevMountSdmc();
+    hidInitializeTouchScreen();
+
+    PadState pad;
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    padInitializeDefault(&pad);
+
+    const char* CONFIG_PATH = "sdmc:/switch/streamdeck_proto/config.json";
+    std::string json = read_file_all(CONFIG_PATH);
+
+    int current_page = 1;
+    std::string pc_ip = "192.168.15.56"; 
+
+    if (!json.empty()) {
+        json_get_string_top(json, "pc_ip", pc_ip);
+        json_find_int_top(json, "current_page", current_page);
+        if (current_page <= 0) current_page = 1;
+    }
+
+    socketInitializeDefault();
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+
+    struct timeval tv;
+    tv.tv_sec = 1; 
+    tv.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(5555);
+    addr.sin_addr.s_addr = inet_addr(pc_ip.c_str());
+
+    if (connect(sockfd, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sockfd);
+        sockfd = -1;
+    }
+
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) return 0;
+
+    SDL_Window* win = SDL_CreateWindow("Switch Deck", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_SHOWN);
+    SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+    IMG_Init(IMG_INIT_PNG);
+
+    const int cols = 5, rows = 3;
+    const int margin = 30, gap = 18;
+    const int tileW = (1280 - margin * 2 - gap * (cols - 1)) / cols;
+    const int tileH = (720 - margin * 2 - gap * (rows - 1)) / rows;
+
+    SDL_Rect tiles[cols * rows];
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            tiles[r * cols + c] = { margin + c * (tileW + gap), margin + r * (tileH + gap), tileW, tileH };
+
+    std::vector<TexEntry> cache;
+    s32 prevTouchCount = 0;
+
+    while (appletMainLoop()) {
+        padUpdate(&pad);
+        u64 down = padGetButtonsDown(&pad);
+        if (down & HidNpadButton_Plus) break;
+
+        if (down & HidNpadButton_Y) {
+            json = read_file_all(CONFIG_PATH);
+            texcache_free(cache);
+        }
+
+        HidTouchScreenState ts{};
+        hidGetTouchScreenStates(&ts, 1);
+
+        if (prevTouchCount == 0 && ts.count > 0) {
+            int tx = (int)ts.touches[0].x;
+            int ty = (int)ts.touches[0].y;
+
+            for (int i = 0; i < cols * rows; i++) {
+                if (point_in_rect(tx, ty, tiles[i])) {
+                    int btn_id = i + 1;
+                    
+                    if (sockfd >= 0) send_btn(sockfd, current_page, btn_id);
+
+                    std::string t;
+                    int pg = 0;
+                    if (!json.empty() && json_get_type_and_page_for(current_page, btn_id, json, t, pg)) {
+                        if (t == "goto_page" && pg > 0) {
+                            current_page = pg;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        prevTouchCount = ts.count;
+
+        // Fundo Verde se Conectado / Fundo Vermelho se Offline
+        if (sockfd >= 0) SDL_SetRenderDrawColor(ren, 8, 20, 12, 255); 
+        else             SDL_SetRenderDrawColor(ren, 28, 10, 10, 255); 
+        SDL_RenderClear(ren);
+
+        for (int i = 0; i < cols * rows; i++) {
+            SDL_Rect t = tiles[i];
+            SDL_SetRenderDrawColor(ren, 14, 16, 22, 255);
+            SDL_RenderFillRect(ren, &t);
+            
+            std::string iconRel;
+            if (!json.empty() && json_get_icon_for(current_page, i + 1, json, iconRel) && !iconRel.empty()) {
+                std::string full = "sdmc:/switch/streamdeck_proto/" + iconRel;
+                SDL_Texture* tex = texcache_get(ren, cache, full);
+                if (tex) {
+                    SDL_Rect dst = { t.x + 18, t.y + 14, t.w - 36, t.h - 28 };
+                    SDL_RenderCopy(ren, tex, nullptr, &dst);
+                }
+            }
+        }
+
+        SDL_RenderPresent(ren);
+        SDL_Delay(16);
+    }
+
+    texcache_free(cache);
+    IMG_Quit();
+    SDL_DestroyRenderer(ren);
+    SDL_DestroyWindow(win);
+    SDL_Quit();
+    if (sockfd >= 0) close(sockfd);
+    socketExit();
+    return 0;
+}

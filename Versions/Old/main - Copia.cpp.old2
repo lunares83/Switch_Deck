@@ -1,0 +1,91 @@
+#include <switch.h>
+
+#include <cstdio>
+#include <cstring>
+
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <unistd.h>
+
+static int connect_to_pc(const char* ip, int port) {
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) return -1;
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    addr.sin_addr.s_addr = inet_addr(ip);
+
+    if (connect(sockfd, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sockfd);
+        return -2;
+    }
+    return sockfd;
+}
+
+int main(int, char**) {
+    consoleInit(nullptr);
+
+    // Input (padrão libnx atual)
+    PadState pad;
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    padInitializeDefault(&pad);
+
+    // Sockets
+    Result rc = socketInitializeDefault();
+    if (R_FAILED(rc)) {
+        std::printf("socketInitializeDefault falhou: 0x%x\n", rc);
+        std::printf("Pressione + para sair.\n");
+        while (appletMainLoop()) {
+            padUpdate(&pad);
+            u64 kDown = padGetButtonsDown(&pad);
+            if (kDown & HidNpadButton_Plus) break;
+            consoleUpdate(nullptr);
+        }
+        consoleExit(nullptr);
+        return 0;
+    }
+
+    const char* PC_IP = "192.168.0.10"; // <-- coloque aqui o IP DO SEU PC
+    const int PC_PORT = 5555;
+
+    std::printf("Conectando em %s:%d...\n", PC_IP, PC_PORT);
+
+    int sockfd = connect_to_pc(PC_IP, PC_PORT);
+    if (sockfd < 0) {
+        std::printf("Falha ao conectar (err=%d)\n", sockfd);
+        std::printf("Verifique receiver/firewall/IP.\n");
+    } else {
+        const char* msg = "HELLO_FROM_SWITCH\n";
+        send(sockfd, msg, std::strlen(msg), 0);
+        std::printf("Enviado: %s", msg);
+    }
+
+    std::printf("\nA = BTN 1 | B = BTN 2 | + sai\n");
+
+    while (appletMainLoop()) {
+        padUpdate(&pad);
+        u64 kDown = padGetButtonsDown(&pad);
+
+        if (kDown & HidNpadButton_Plus) break;
+
+        if (sockfd >= 0) {
+            if (kDown & HidNpadButton_A) {
+                const char* msg = "BTN_PRESS 1\n";
+                send(sockfd, msg, std::strlen(msg), 0);
+            }
+            if (kDown & HidNpadButton_B) {
+                const char* msg = "BTN_PRESS 2\n";
+                send(sockfd, msg, std::strlen(msg), 0);
+            }
+        }
+
+        consoleUpdate(nullptr);
+    }
+
+    if (sockfd >= 0) close(sockfd);
+    socketExit();
+    consoleExit(nullptr);
+    return 0;
+}

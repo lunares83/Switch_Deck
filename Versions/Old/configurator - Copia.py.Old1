@@ -1,0 +1,422 @@
+import json
+import os
+import shutil
+import sys
+import re
+
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+    QMessageBox, QPushButton, QSpinBox, QToolButton, QVBoxLayout, QWidget
+)
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CONFIG_PATH = os.path.join(APP_DIR, "config.json")
+
+ASSETS_DIR = os.path.join(APP_DIR, "assets_icons")
+ICONS_DIR = os.path.join(APP_DIR, "icons")
+
+COLS = 5
+ROWS = 3
+BTN_COUNT = COLS * ROWS
+MAX_PAGES = 10
+
+def ensure_dirs():
+    os.makedirs(ASSETS_DIR, exist_ok=True)
+    os.makedirs(ICONS_DIR, exist_ok=True)
+
+def empty_config():
+    return {"pc_ip": "192.168.1.50", "current_page": 1, "pages": {}}
+
+def load_config(path: str):
+    if not os.path.exists(path):
+        return empty_config()
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_config(path: str, cfg: dict):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+def get_slot(cfg: dict, page: int, btn_id: int):
+    return cfg.get("pages", {}).get(str(page), {}).get(str(btn_id))
+
+def set_slot(cfg: dict, page: int, btn_id: int, slot: dict | None):
+    cfg.setdefault("pages", {})
+    cfg["pages"].setdefault(str(page), {})
+    if slot is None:
+        cfg["pages"][str(page)].pop(str(btn_id), None)
+    else:
+        cfg["pages"][str(page)][str(btn_id)] = slot
+
+def normalize_icon_dest_name(src_path: str) -> str:
+    base = os.path.basename(src_path)
+    base = base.lower()
+    base = re.sub(r"[^a-z0-9_.-]", "_", base)
+    return base
+
+def import_icon(src_path: str) -> str:
+    if not src_path:
+        return ""
+
+    ensure_dirs()
+    name = normalize_icon_dest_name(src_path)
+
+    dst_assets = os.path.join(ASSETS_DIR, name)
+    dst_icons = os.path.join(ICONS_DIR, name)
+
+    if os.path.abspath(src_path) != os.path.abspath(dst_assets):
+        shutil.copy2(src_path, dst_assets)
+    if os.path.abspath(src_path) != os.path.abspath(dst_icons):
+        shutil.copy2(src_path, dst_icons)
+
+    return f"icons/{name}"
+
+def icon_abs_from_rel(icon_rel: str) -> str:
+    if not icon_rel:
+        return ""
+    icon_rel = icon_rel.replace("\\", "/")
+
+    if icon_rel.startswith("icons/"):
+        return os.path.join(APP_DIR, icon_rel.replace("/", os.sep))
+    if icon_rel.startswith("assets_icons/"):
+        return os.path.join(APP_DIR, icon_rel.replace("/", os.sep))
+
+    p1 = os.path.join(ICONS_DIR, icon_rel.replace("/", os.sep))
+    if os.path.exists(p1):
+        return p1
+
+    return os.path.join(ASSETS_DIR, icon_rel.replace("/", os.sep))
+
+def iter_used_icons(cfg: dict):
+    pages = cfg.get("pages", {})
+    for page_key, page_obj in pages.items():
+        if not isinstance(page_obj, dict):
+            continue
+        for btn_key, slot in page_obj.items():
+            if not isinstance(slot, dict):
+                continue
+            icon_rel = slot.get("icon", "")
+            if icon_rel:
+                yield icon_rel
+
+
+class TileButton(QToolButton):
+    def __init__(self, btn_id: int, parent=None):
+        super().__init__(parent)
+        self.btn_id = btn_id
+        self.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.setFixedSize(200, 150)
+        self.setIconSize(QSize(180, 130))
+        self.setStyleSheet("""
+            QToolButton {
+                background-color: #0f1219;
+                border: 2px solid #283246;
+                border-radius: 6px;
+            }
+            QToolButton:hover {
+                border: 2px solid #4a6fb0;
+            }
+            QToolButton:checked {
+                border: 3px solid #6aa6ff;
+            }
+        """)
+        self.setCheckable(True)
+
+    def mouseDoubleClickEvent(self, ev):
+        window = self.window()
+        if hasattr(window, "open_editor"):
+            window.open_editor(self)
+
+
+class EditSlotDialog(QDialog):
+    def __init__(self, page: int, btn_id: int, slot: dict | None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Configurar: Page {page}, Key {btn_id}")
+        self.resize(520, 260)
+
+        self.result_slot = None
+
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(["open_app", "open_url", "hotkey", "goto_page", "empty"])
+
+        self.app_path = QLineEdit()
+        self.btn_pick_app = QPushButton("Select App…")
+        self.btn_pick_app.clicked.connect(self.pick_app)
+
+        self.url = QLineEdit()
+
+        self.hotkey = QLineEdit()
+        self.hotkey.setPlaceholderText("Ex: CTRL+SHIFT+S")
+
+        self.goto_page = QSpinBox()
+        self.goto_page.setRange(1, MAX_PAGES)
+
+        self.icon_path = QLineEdit()
+        self.btn_pick_icon = QPushButton("Select Icon…")
+        self.btn_pick_icon.clicked.connect(self.pick_icon)
+
+        form = QGridLayout()
+        row = 0
+        form.addWidget(QLabel("Type:"), row, 0)
+        form.addWidget(self.type_combo, row, 1, 1, 3)
+        row += 1
+
+        form.addWidget(QLabel("Open App:"), row, 0)
+        form.addWidget(self.app_path, row, 1, 1, 2)
+        form.addWidget(self.btn_pick_app, row, 3)
+        row += 1
+
+        form.addWidget(QLabel("Open URL:"), row, 0)
+        form.addWidget(self.url, row, 1, 1, 3)
+        row += 1
+
+        form.addWidget(QLabel("Hotkey:"), row, 0)
+        form.addWidget(self.hotkey, row, 1, 1, 3)
+        row += 1
+
+        form.addWidget(QLabel("Goto Page:"), row, 0)
+        form.addWidget(self.goto_page, row, 1, 1, 3)
+        row += 1
+
+        form.addWidget(QLabel("Icon file:"), row, 0)
+        form.addWidget(self.icon_path, row, 1, 1, 2)
+        form.addWidget(self.btn_pick_icon, row, 3)
+        row += 1
+
+        box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel | QDialogButtonBox.Reset)
+        box.accepted.connect(self.on_save)
+        box.rejected.connect(self.reject)
+        box.button(QDialogButtonBox.Reset).clicked.connect(self.on_clear)
+
+        root = QVBoxLayout()
+        root.addLayout(form)
+        root.addStretch(1)
+        root.addWidget(box)
+        self.setLayout(root)
+
+        if slot:
+            t = slot.get("type", "open_app")
+            if t not in ["open_app", "open_url", "hotkey", "goto_page"]:
+                t = "open_app"
+            self.type_combo.setCurrentText(t)
+            self.app_path.setText(slot.get("path", ""))
+            self.url.setText(slot.get("url", ""))
+            keys = slot.get("keys", [])
+            if isinstance(keys, list):
+                self.hotkey.setText("+".join(keys))
+            self.goto_page.setValue(int(slot.get("page", 1)))
+            self.icon_path.setText(slot.get("icon", ""))
+
+        self.type_combo.currentTextChanged.connect(self.update_enabled)
+        self.update_enabled()
+
+    def update_enabled(self):
+        t = self.type_combo.currentText()
+        self.app_path.setEnabled(t == "open_app")
+        self.btn_pick_app.setEnabled(t == "open_app")
+
+        self.url.setEnabled(t == "open_url")
+        self.hotkey.setEnabled(t == "hotkey")
+        self.goto_page.setEnabled(t == "goto_page")
+
+        self.icon_path.setEnabled(t != "empty")
+        self.btn_pick_icon.setEnabled(t != "empty")
+
+    def pick_app(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select application", "", "Executables (*.exe);;All files (*.*)")
+        if path:
+            self.app_path.setText(path)
+
+    def pick_icon(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select icon (PNG/JPG)", "", "Images (*.png *.jpg *.jpeg);;All files (*.*)")
+        if path:
+            self.icon_path.setText(path)
+
+    def on_clear(self):
+        self.type_combo.setCurrentText("empty")
+        self.app_path.clear()
+        self.url.clear()
+        self.hotkey.clear()
+        self.icon_path.clear()
+        self.goto_page.setValue(1)
+
+    def on_save(self):
+        t = self.type_combo.currentText()
+        if t == "empty":
+            self.result_slot = None
+            self.accept()
+            return
+
+        icon_rel = ""
+        icon_src_or_rel = self.icon_path.text().strip()
+        if icon_src_or_rel:
+            if os.path.isabs(icon_src_or_rel) and os.path.exists(icon_src_or_rel):
+                icon_rel = import_icon(icon_src_or_rel)
+            else:
+                icon_rel = icon_src_or_rel.replace("\\", "/")
+
+        if t == "open_app":
+            path = self.app_path.text().strip()
+            if not path:
+                QMessageBox.warning(self, "Erro", "Selecione um aplicativo (.exe).")
+                return
+            self.result_slot = {"type": "open_app", "path": path, "icon": icon_rel}
+
+        elif t == "open_url":
+            url = self.url.text().strip()
+            if not url:
+                QMessageBox.warning(self, "Erro", "Digite uma URL.")
+                return
+            self.result_slot = {"type": "open_url", "url": url, "icon": icon_rel}
+
+        elif t == "hotkey":
+            hk = self.hotkey.text().strip()
+            if not hk:
+                QMessageBox.warning(self, "Erro", "Digite uma hotkey (ex: CTRL+SHIFT+S).")
+                return
+            keys = [k.strip().upper() for k in hk.split("+") if k.strip()]
+            self.result_slot = {"type": "hotkey", "keys": keys, "icon": icon_rel}
+
+        elif t == "goto_page":
+            pg = int(self.goto_page.value())
+            self.result_slot = {"type": "goto_page", "page": pg, "icon": icon_rel}
+
+        else:
+            QMessageBox.warning(self, "Erro", f"Tipo desconhecido: {t}")
+            return
+
+        self.accept()
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        ensure_dirs()
+
+        self.setWindowTitle("Switch Deck Configurator")
+        self.cfg_path = DEFAULT_CONFIG_PATH
+        self.cfg = load_config(self.cfg_path)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QVBoxLayout(central)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Page:"))
+        self.page_buttons: list[QPushButton] = []
+        for p in range(1, MAX_PAGES + 1):
+            b = QPushButton(str(p))
+            b.setCheckable(True)
+            b.clicked.connect(lambda checked, pp=p: self.set_page(pp))
+            self.page_buttons.append(b)
+            top.addWidget(b)
+            
+        top.addStretch(1)
+
+        # Campos Simplificados e Botão Único 
+        top.addWidget(QLabel("PC IP:"))
+        self.ip_input = QLineEdit()
+        self.ip_input.setPlaceholderText("Ex: 192.168.1.50")
+        self.ip_input.setText(self.cfg.get("pc_ip", ""))
+        self.ip_input.setFixedWidth(120)
+        top.addWidget(self.ip_input)
+
+        self.btn_send = QPushButton("SAVE TO SWITCH")
+        self.btn_send.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white; padding: 6px 16px;")
+        self.btn_send.clicked.connect(self.send_to_switch)
+        top.addWidget(self.btn_send)
+
+        root.addLayout(top)
+
+        grid_box = QGroupBox()
+        grid = QGridLayout(grid_box)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(12)
+
+        self.tiles: list[TileButton] = []
+        for r in range(ROWS):
+            for c in range(COLS):
+                btn_id = r * COLS + c + 1
+                tb = TileButton(btn_id)
+                tb.clicked.connect(lambda checked, b=tb: self.on_tile_clicked(b))
+                self.tiles.append(tb)
+                grid.addWidget(tb, r, c)
+
+        root.addWidget(grid_box)
+
+        self.current_page = int(self.cfg.get("current_page", 1))
+        self.refresh_ui()
+
+    def set_page(self, page: int):
+        self.current_page = page
+        self.cfg["current_page"] = page
+        self.refresh_ui()
+
+    def on_tile_clicked(self, tb: TileButton):
+        for t in self.tiles:
+            t.setChecked(t is tb)
+
+    def open_editor(self, tb: TileButton):
+        btn_id = tb.btn_id
+        slot = get_slot(self.cfg, self.current_page, btn_id)
+        dlg = EditSlotDialog(self.current_page, btn_id, slot, self)
+        if dlg.exec() == QDialog.Accepted:
+            set_slot(self.cfg, self.current_page, btn_id, dlg.result_slot)
+            self.refresh_ui()
+
+    def refresh_ui(self):
+        for i, b in enumerate(self.page_buttons, start=1):
+            b.setChecked(i == self.current_page)
+
+        for tb in self.tiles:
+            slot = get_slot(self.cfg, self.current_page, tb.btn_id)
+            if slot and slot.get("icon"):
+                icon_abs = icon_abs_from_rel(slot["icon"])
+                if icon_abs and os.path.exists(icon_abs):
+                    tb.setIcon(QIcon(icon_abs))
+                else:
+                    tb.setIcon(QIcon())
+            else:
+                tb.setIcon(QIcon())
+
+    def send_to_switch(self):
+        self.cfg["pc_ip"] = self.ip_input.text().strip()
+        
+        # Salva as configs localmente por segurança antes de enviar
+        save_config(self.cfg_path, self.cfg)
+
+        folder = QFileDialog.getExistingDirectory(self, "Selecione a pasta destino no Cartão SD (ex: SD:/switch/streamdeck_proto)")
+        if not folder:
+            return
+
+        # Grava config.json na pasta destino
+        dst_cfg = os.path.join(folder, "config.json")
+        save_config(dst_cfg, self.cfg)
+
+        # Cria icons/ no destino e copia apenas os ícones usados
+        dst_icons = os.path.join(folder, "icons")
+        os.makedirs(dst_icons, exist_ok=True)
+
+        used = list(iter_used_icons(self.cfg))
+        copied = 0
+        for icon_rel in used:
+            icon_rel = icon_rel.replace("\\", "/")
+            if icon_rel.startswith("icons/"):
+                src_abs = os.path.join(APP_DIR, icon_rel.replace("/", os.sep))
+                if os.path.exists(src_abs):
+                    shutil.copy2(src_abs, os.path.join(dst_icons, os.path.basename(src_abs)))
+                    copied += 1
+
+        QMessageBox.information(self, "Sucesso", f"Enviado para a pasta selecionada!\nÍcones copiados: {copied}")
+
+def main():
+    app = QApplication(sys.argv)
+    w = MainWindow()
+    w.show()
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()

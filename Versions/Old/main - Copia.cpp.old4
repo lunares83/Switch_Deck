@@ -1,0 +1,180 @@
+#include <switch.h>
+
+#include <SDL2/SDL.h>
+
+#include <cstdio>
+#include <cstring>
+
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <unistd.h>
+
+static int connect_to_pc(const char* ip, int port) {
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) return -1;
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    addr.sin_addr.s_addr = inet_addr(ip);
+
+    if (connect(sockfd, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sockfd);
+        return -2;
+    }
+    return sockfd;
+}
+
+static void send_btn(int sockfd, int id) {
+    if (sockfd < 0) return;
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "BTN_PRESS %d\n", id);
+    send(sockfd, buf, std::strlen(buf), 0);
+}
+
+static bool point_in_rect(int x, int y, const SDL_Rect& r) {
+    return x >= r.x && x < (r.x + r.w) && y >= r.y && y < (r.y + r.h);
+}
+
+int main(int, char**) {
+    // Touch (libnx)
+    hidInitializeTouchScreen(); // [web:129]
+
+    // Gamepad para sair com +
+    PadState pad;
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    padInitializeDefault(&pad);
+
+    // Sockets (libnx)
+    Result rc = socketInitializeDefault();
+    int sockfd = -1;
+    if (R_SUCCEEDED(rc)) {
+        const char* PC_IP = "192.168.0.10"; // <-- IP do PC
+        const int PC_PORT = 5555;
+        sockfd = connect_to_pc(PC_IP, PC_PORT);
+        if (sockfd >= 0) {
+            const char* hello = "HELLO_FROM_SWITCH\n";
+            send(sockfd, hello, std::strlen(hello), 0);
+        }
+    }
+
+    // SDL2
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        return 0;
+    }
+
+    SDL_Window* win = SDL_CreateWindow(
+        "Switch StreamDeck Proto",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        1280, 720,
+        SDL_WINDOW_SHOWN
+    );
+    if (!win) {
+        SDL_Quit();
+        return 0;
+    }
+
+    SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+    if (!ren) {
+        SDL_DestroyWindow(win);
+        SDL_Quit();
+        return 0;
+    }
+
+    const int cols = 5;
+    const int rows = 3;
+
+    const int screenW = 1280;
+    const int screenH = 720;
+
+    const int margin = 30;
+    const int gap = 18;
+
+    const int gridW = screenW - margin * 2;
+    const int gridH = screenH - margin * 2;
+
+    const int tileW = (gridW - gap * (cols - 1)) / cols;
+    const int tileH = (gridH - gap * (rows - 1)) / rows;
+
+    SDL_Rect tiles[cols * rows];
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            SDL_Rect t;
+            t.x = margin + c * (tileW + gap);
+            t.y = margin + r * (tileH + gap);
+            t.w = tileW;
+            t.h = tileH;
+            tiles[r * cols + c] = t;
+        }
+    }
+
+    s32 prevTouchCount = 0;
+    int highlight = -1;
+    u64 highlight_until_ms = 0;
+
+    while (appletMainLoop()) {
+        // sair com +
+        padUpdate(&pad);
+        if (padGetButtonsDown(&pad) & HidNpadButton_Plus) break;
+
+        // Touch read (libnx) [web:246]
+        HidTouchScreenState ts{};
+        hidGetTouchScreenStates(&ts, 1);
+
+        if (prevTouchCount == 0 && ts.count > 0) {
+            const HidTouchState& t = ts.touches[0]; // x,y [web:140]
+            int tx = (int)t.x;
+            int ty = (int)t.y;
+
+            // Descobre qual tile foi tocado
+            int hit = -1;
+            for (int i = 0; i < cols * rows; i++) {
+                if (point_in_rect(tx, ty, tiles[i])) {
+                    hit = i;
+                    break;
+                }
+            }
+
+            if (hit >= 0) {
+                int id = hit + 1; // 1..15
+                send_btn(sockfd, id);
+
+                highlight = hit;
+                highlight_until_ms = SDL_GetTicks64() + 180;
+            }
+        }
+        prevTouchCount = ts.count;
+
+        // Render
+        SDL_SetRenderDrawColor(ren, 8, 10, 14, 255);
+        SDL_RenderClear(ren);
+
+        for (int i = 0; i < cols * rows; i++) {
+            SDL_Rect t = tiles[i];
+
+            bool is_hi = (i == highlight) && (SDL_GetTicks64() <= highlight_until_ms);
+
+            // Fundo do tile
+            if (is_hi) SDL_SetRenderDrawColor(ren, 30, 60, 120, 255);
+            else       SDL_SetRenderDrawColor(ren, 14, 16, 22, 255);
+            SDL_RenderFillRect(ren, &t);
+
+            // Borda
+            if (is_hi) SDL_SetRenderDrawColor(ren, 120, 180, 255, 255);
+            else       SDL_SetRenderDrawColor(ren, 40, 50, 70, 255);
+            SDL_RenderDrawRect(ren, &t);
+        }
+
+        SDL_RenderPresent(ren);
+        SDL_Delay(16);
+    }
+
+    if (sockfd >= 0) close(sockfd);
+    socketExit();
+
+    SDL_DestroyRenderer(ren);
+    SDL_DestroyWindow(win);
+    SDL_Quit();
+    return 0;
+}

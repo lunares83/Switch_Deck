@@ -1,0 +1,44 @@
+{
+  "pc_ip": "192.168.15.56",
+  "current_page": 1,
+  "pages": {
+    "p1": {
+      "b1": {
+        "type": "open_app",
+        "path": "C:/Windows/System32/notepad.exe",
+        "icon": "icons/windows_notepad_icon.png"
+      },
+      "b2": {
+        "type": "open_app",
+        "path": "C:/Desktop Atalhos/Jogos/Content Manager.exe",
+        "icon": "icons/asseto.png"
+      },
+      "b3": {
+        "type": "goto_page",
+        "page": 2,
+        "icon": "icons/next.png"
+      }
+    },
+    "p2": {
+      "b1": {
+        "type": "open_url",
+        "url": "https://lunares83br.com.br/",
+        "icon": "icons/url.png"
+      },
+      "b2": {
+        "type": "hotkey",
+        "keys": [
+          "CTRL",
+          "SHIFT",
+          "ESC"
+        ],
+        "icon": "icons/shortcut.png"
+      },
+      "b3": {
+        "type": "goto_page",
+        "page": 1,
+        "icon": "icons/previus.png"
+      }
+    }
+  }
+}
