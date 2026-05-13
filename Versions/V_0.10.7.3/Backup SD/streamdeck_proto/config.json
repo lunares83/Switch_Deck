@@ -1,0 +1,54 @@
+{
+  "pc_ip": "192.168.15.56",
+  "current_page": 1,
+  "pages": {
+    "p1": {
+      "b1": {
+        "type": "open_app",
+        "path": "C:/Windows/System32/notepad.exe",
+        "icon": "icons/windows_notepad_icon.png"
+      },
+      "b2": {
+        "type": "open_app",
+        "path": "C:/Windows/System32/calc.exe",
+        "icon": "icons/calc.png"
+      },
+      "b3": {
+        "type": "goto_page",
+        "page": 2,
+        "icon": "icons/next.png"
+      },
+      "b15": {
+        "type": "open_url",
+        "url": "https://www.paypal.com/donate/?business=4R7CCXLYZDM4C&no_recurring=0&item_name=I%27m+does+this+purely+as+a+hobby+without+incentive+or+compensation.%0AIf+you+could+donate+a+coffee+to+motivate+me%2C+I%27d+appreciate.&currency_code=USD",
+        "icon": "icons/paypal_2014_logo.png"
+      }
+    },
+    "p2": {
+      "b1": {
+        "type": "open_url",
+        "url": "https://lunares83br.com.br/",
+        "icon": "icons/url.png"
+      },
+      "b2": {
+        "type": "hotkey",
+        "keys": [
+          "CTRL",
+          "SHIFT",
+          "ESC"
+        ],
+        "icon": "icons/shortcut.png"
+      },
+      "b3": {
+        "type": "goto_page",
+        "page": 1,
+        "icon": "icons/previus.png"
+      },
+      "b15": {
+        "type": "open_url",
+        "url": "https://www.paypal.com/donate/?business=4R7CCXLYZDM4C&no_recurring=0&item_name=I%27m+does+this+purely+as+a+hobby+without+incentive+or+compensation.%0AIf+you+could+donate+a+coffee+to+motivate+me%2C+I%27d+appreciate.&currency_code=USD",
+        "icon": "icons/paypal_2014_logo.png"
+      }
+    }
+  }
+}
