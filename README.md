@@ -33,7 +33,8 @@ Open the app via the Homebrew Menu.
 
 If the background is green, you are connected! If it's red, double-check the IP in config.json.
 
-I'll upload pictures and a video of it working soon.
+The video below shows a step-by-step tutorial of the app in action; only the subtitles are currently in English.:
+https://www.youtube.com/watch?v=F54bT5_ek4Y
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -70,4 +71,6 @@ Abra o app via Homebrew Menu.
 
 Se o fundo estiver verde, você está conectado! Se estiver vermelho, verifique o IP no config.json.
 
-Em breve subo imagens e video dele funcionando.
+O video abaixo mostra um passo a passo do app funiconando.:
+https://www.youtube.com/watch?v=F54bT5_ek4Y
+
